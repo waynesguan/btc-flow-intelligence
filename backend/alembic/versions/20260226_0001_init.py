@@ -17,13 +17,23 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-lead_lag_enum = sa.Enum("lead", "coincident", "lag", name="lead_lag_enum", create_type=False)
-metric_tier_enum = sa.Enum("must_have", "nice_to_have", name="metric_tier_enum", create_type=False)
-
 
 def upgrade() -> None:
-    lead_lag_enum.create(op.get_bind(), checkfirst=True)
-    metric_tier_enum.create(op.get_bind(), checkfirst=True)
+    # Create enum types via raw SQL to avoid SQLAlchemy DDL event conflicts
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE lead_lag_enum AS ENUM ('lead', 'coincident', 'lag');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
+    op.execute("""
+        DO $$ BEGIN
+            CREATE TYPE metric_tier_enum AS ENUM ('must_have', 'nice_to_have');
+        EXCEPTION
+            WHEN duplicate_object THEN null;
+        END $$;
+    """)
 
     op.create_table(
         "raw_observations",
@@ -56,7 +66,7 @@ def upgrade() -> None:
         sa.Column("metric_id", sa.String(length=128), primary_key=True),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("dimension", sa.Integer(), nullable=False),
-        sa.Column("lead_lag", lead_lag_enum, nullable=False),
+        sa.Column("lead_lag", postgresql.ENUM("lead", "coincident", "lag", name="lead_lag_enum", create_type=False), nullable=False),
         sa.Column("definition_short", sa.Text(), nullable=False),
         sa.Column("definition_pro", sa.Text(), nullable=False),
         sa.Column("calc_spec", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
@@ -66,7 +76,7 @@ def upgrade() -> None:
         sa.Column("chart_spec", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
-        sa.Column("tier", metric_tier_enum, nullable=False),
+        sa.Column("tier", postgresql.ENUM("must_have", "nice_to_have", name="metric_tier_enum", create_type=False), nullable=False),
         sa.Column("available_since", sa.DateTime(timezone=True), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )
@@ -154,5 +164,5 @@ def downgrade() -> None:
     op.drop_index("ix_raw_source_dataset_ts", table_name="raw_observations")
     op.drop_table("raw_observations")
 
-    metric_tier_enum.drop(op.get_bind(), checkfirst=True)
-    lead_lag_enum.drop(op.get_bind(), checkfirst=True)
+    op.execute("DROP TYPE IF EXISTS metric_tier_enum")
+    op.execute("DROP TYPE IF EXISTS lead_lag_enum")
