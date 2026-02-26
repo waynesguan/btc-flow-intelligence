@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Select, and_, select
@@ -54,6 +54,28 @@ def _normalize_coinbase(raw: RawObservation) -> list[NormalizedPoint]:
         ),
         NormalizedPoint(
             series_id="market.spot.btcusd.volume_coinbase",
+            ts=raw.ts,
+            value=float(payload.get("volume", 0.0)),
+            unit="BTC",
+            source_id=raw.source_id,
+            quality_flags={},
+        ),
+    ]
+
+
+def _normalize_spot_exchange(raw: RawObservation, exchange: str) -> list[NormalizedPoint]:
+    payload = raw.payload
+    return [
+        NormalizedPoint(
+            series_id=f"market.spot.btcusd.price_{exchange}",
+            ts=raw.ts,
+            value=float(payload.get("close", 0.0)),
+            unit="USD",
+            source_id=raw.source_id,
+            quality_flags={},
+        ),
+        NormalizedPoint(
+            series_id=f"market.spot.btcusd.volume_{exchange}",
             ts=raw.ts,
             value=float(payload.get("volume", 0.0)),
             unit="BTC",
@@ -138,7 +160,7 @@ def _normalize_coingecko(raw: RawObservation) -> list[NormalizedPoint]:
         quality_flags = payload.get("quality_flags", {})
         return [
             NormalizedPoint(
-                series_id="market.derivatives.open_interest_btc",
+                series_id="market.derivatives.open_interest_coingecko",
                 ts=raw.ts,
                 value=float(payload.get("open_interest_btc", 0.0)),
                 unit="BTC",
@@ -146,16 +168,93 @@ def _normalize_coingecko(raw: RawObservation) -> list[NormalizedPoint]:
                 quality_flags=quality_flags,
             ),
             NormalizedPoint(
-                series_id="market.derivatives.funding_rate",
+                series_id="market.derivatives.funding_rate_coingecko",
                 ts=raw.ts,
                 value=float(payload.get("funding_rate_proxy", 0.0)),
                 unit="ratio",
                 source_id=raw.source_id,
-                quality_flags={**quality_flags, "proxy": True},
+                quality_flags=quality_flags,
             ),
         ]
 
     return []
+
+
+def _normalize_deribit(raw: RawObservation) -> list[NormalizedPoint]:
+    payload = raw.payload
+    return [
+        NormalizedPoint(
+            series_id="market.derivatives.open_interest_deribit",
+            ts=raw.ts,
+            value=float(payload.get("open_interest_btc", 0.0)),
+            unit="BTC",
+            source_id=raw.source_id,
+            quality_flags={},
+        ),
+        NormalizedPoint(
+            series_id="market.derivatives.funding_rate_deribit",
+            ts=raw.ts,
+            value=float(payload.get("funding_rate", 0.0)),
+            unit="ratio",
+            source_id=raw.source_id,
+            quality_flags={},
+        ),
+        NormalizedPoint(
+            series_id="market.derivatives.basis_spread_deribit",
+            ts=raw.ts,
+            value=float(payload.get("basis_spread", 0.0)),
+            unit="USD",
+            source_id=raw.source_id,
+            quality_flags={},
+        ),
+        NormalizedPoint(
+            series_id="market.derivatives.liquidation_volume_deribit",
+            ts=raw.ts,
+            value=float(payload.get("liquidation_volume_usd", 0.0)),
+            unit="USD",
+            source_id=raw.source_id,
+            quality_flags={},
+        ),
+    ]
+
+
+def _normalize_onchain(raw: RawObservation) -> list[NormalizedPoint]:
+    payload = raw.payload
+    fields = {
+        "realized_cap": ("onchain.realized_cap", "USD"),
+        "mvrv": ("onchain.mvrv", "ratio"),
+        "realized_profit_loss": ("onchain.realized_profit_loss", "USD"),
+        "cost_basis": ("onchain.cost_basis", "USD"),
+        "lth_supply": ("onchain.lth_supply", "BTC"),
+        "sth_supply": ("onchain.sth_supply", "BTC"),
+        "whale_balance": ("onchain.whale_balance", "BTC"),
+        "exchange_netflow": ("onchain.exchange_netflow", "BTC"),
+        "exchange_stablecoin_balance": ("onchain.exchange_stablecoin_balance", "USD"),
+        "stablecoin_btc_volume_share": ("onchain.stablecoin_btc_volume_share", "pct"),
+    }
+
+    points: list[NormalizedPoint] = []
+    for key, (series_id, unit) in fields.items():
+        raw_val = payload.get(key)
+        if raw_val in (None, ""):
+            continue
+        try:
+            value = float(raw_val)
+        except Exception:  # noqa: BLE001
+            continue
+
+        points.append(
+            NormalizedPoint(
+                series_id=series_id,
+                ts=raw.ts,
+                value=value,
+                unit=unit,
+                source_id=raw.source_id,
+                quality_flags={"provider": payload.get("provider", raw.source_id)},
+            )
+        )
+
+    return points
 
 
 def normalize_raw_record(raw: RawObservation) -> list[NormalizedPoint]:
@@ -167,6 +266,14 @@ def normalize_raw_record(raw: RawObservation) -> list[NormalizedPoint]:
         return _normalize_farside(raw)
     if raw.source_id == "coingecko":
         return _normalize_coingecko(raw)
+    if raw.source_id == "kraken":
+        return _normalize_spot_exchange(raw, "kraken")
+    if raw.source_id == "bitstamp":
+        return _normalize_spot_exchange(raw, "bitstamp")
+    if raw.source_id == "deribit":
+        return _normalize_deribit(raw)
+    if raw.source_id in {"glassnode", "coin_metrics"}:
+        return _normalize_onchain(raw)
     return []
 
 

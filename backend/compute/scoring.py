@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean, median, pstdev
 from typing import Optional
 
 import yaml
@@ -153,6 +154,12 @@ def _upsert_scores(db: Session, rows: list[dict]) -> int:
     return int(result.rowcount or 0)
 
 
+def _as_risk_liquidation(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    return math.log1p(abs(value))
+
+
 def compute_scores(
     db: Session,
     start: Optional[datetime] = None,
@@ -166,6 +173,7 @@ def compute_scores(
 
     metric_ids = [
         "us_spot_etf_netflow_total",
+        "stablecoin_net_mint_burn",
         "usdt_supply_change",
         "usdc_supply_change",
         "spot_volume_trend",
@@ -173,8 +181,12 @@ def compute_scores(
         "funding_rate",
         "basis_spread",
         "leverage_risk_index",
+        "liquidation_volume",
         "fed_balance_sheet_change",
         "dxy",
+        "realized_cap_change",
+        "whale_accumulation",
+        "exchange_netflow",
     ]
     metric_series = _query_metric_series(db=db, metric_ids=metric_ids, start=start, end=end)
 
@@ -188,28 +200,48 @@ def compute_scores(
         if etf is not None:
             raw_capital_components["etf_institutional"][ts] = etf
 
-        stable_parts = []
-        usdt = metric_series.get("usdt_supply_change", {}).get(ts)
-        usdc = metric_series.get("usdc_supply_change", {}).get(ts)
-        if usdt is not None:
-            stable_parts.append(usdt)
-        if usdc is not None:
-            stable_parts.append(usdc)
-        if stable_parts:
-            raw_capital_components["stablecoin"][ts] = sum(stable_parts) / len(stable_parts)
+        stable_net = metric_series.get("stablecoin_net_mint_burn", {}).get(ts)
+        if stable_net is None:
+            stable_parts = []
+            usdt = metric_series.get("usdt_supply_change", {}).get(ts)
+            usdc = metric_series.get("usdc_supply_change", {}).get(ts)
+            if usdt is not None:
+                stable_parts.append(usdt)
+            if usdc is not None:
+                stable_parts.append(usdc)
+            if stable_parts:
+                stable_net = sum(stable_parts) / len(stable_parts)
+        if stable_net is not None:
+            raw_capital_components["stablecoin"][ts] = stable_net
 
         trend = metric_series.get("spot_volume_trend", {}).get(ts)
         funding = metric_series.get("funding_rate", {}).get(ts)
         basis = metric_series.get("basis_spread", {}).get(ts)
+        oi = metric_series.get("futures_open_interest", {}).get(ts)
         deriv_parts = []
         if trend is not None:
             deriv_parts.append(trend)
         if funding is not None:
             deriv_parts.append(-abs(funding) * 10000)
         if basis is not None:
-            deriv_parts.append(-abs(basis))
+            deriv_parts.append(-abs(basis) / 100)
+        if oi is not None:
+            deriv_parts.append(-(oi / 1_000_000))
         if deriv_parts:
             raw_capital_components["spot_derivatives"][ts] = sum(deriv_parts) / len(deriv_parts)
+
+        realized_change = metric_series.get("realized_cap_change", {}).get(ts)
+        whale = metric_series.get("whale_accumulation", {}).get(ts)
+        exchange_netflow = metric_series.get("exchange_netflow", {}).get(ts)
+        onchain_parts = []
+        if realized_change is not None:
+            onchain_parts.append(realized_change)
+        if whale is not None:
+            onchain_parts.append(whale)
+        if exchange_netflow is not None:
+            onchain_parts.append(-exchange_netflow)
+        if onchain_parts:
+            raw_capital_components["onchain_capital"][ts] = sum(onchain_parts) / len(onchain_parts)
 
         fed = metric_series.get("fed_balance_sheet_change", {}).get(ts)
         dxy = metric_series.get("dxy", {}).get(ts)
@@ -221,14 +253,15 @@ def compute_scores(
         if macro_parts:
             raw_capital_components["macro"][ts] = sum(macro_parts) / len(macro_parts)
 
-        # TODO(Phase 3): populate onchain_capital using on-chain paid providers.
-
         leverage = metric_series.get("leverage_risk_index", {}).get(ts)
         if leverage is not None:
             raw_risk_components["leverage"][ts] = leverage
 
-        if funding is not None:
-            raw_risk_components["liquidation"][ts] = abs(funding) * 10000
+        liquidation = _as_risk_liquidation(metric_series.get("liquidation_volume", {}).get(ts))
+        if liquidation is None and funding is not None:
+            liquidation = abs(funding) * 10000
+        if liquidation is not None:
+            raw_risk_components["liquidation"][ts] = liquidation
 
         if basis is not None:
             raw_risk_components["basis"][ts] = abs(basis)
@@ -263,12 +296,18 @@ def compute_scores(
 
     capital_points = sorted(capital_temp.items(), key=lambda x: x[0])
     capital_value_points = [(ts, score_components[0]) for ts, score_components in capital_points]
+    capital_values = [v for _, v in capital_value_points]
+
     for idx, (ts, (score, components)) in enumerate(capital_points):
         grade, sustained = _capital_grade(idx, capital_value_points, capital_thresholds)
         row_components = {
             **components,
             "grade": grade,
             "is_strong_sustained": sustained,
+            "distribution": {
+                "mean": mean(capital_values) if capital_values else 0,
+                "median": median(capital_values) if capital_values else 0,
+            },
         }
         score_rows.append(
             {
