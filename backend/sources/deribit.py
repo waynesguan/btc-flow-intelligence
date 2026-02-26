@@ -76,8 +76,8 @@ class DeribitAdapter(SourceAdapter):
                 price = float(trade.get("price", 0.0) or 0.0)
                 liquidation_volume += abs(amount * price)
 
-        ts_ms = summary.get("usOut") or int(datetime.now(timezone.utc).timestamp() * 1000)
-        ts = self.to_utc(int(ts_ms) / 1000)
+        ts_us = summary.get("usOut") or int(datetime.now(timezone.utc).timestamp() * 1_000_000)
+        ts = self.to_utc(int(ts_us) / 1_000_000)
 
         observation = SourceObservation(
             source_id=self.source_id,
