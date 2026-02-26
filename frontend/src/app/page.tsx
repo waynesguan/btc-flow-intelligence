@@ -36,7 +36,7 @@ export default async function HomePage({ searchParams }: Props) {
             <h1>概览</h1>
             <p>资金回流评分、结构风险评分与阶段判定的实时总览。</p>
           </div>
-          <p>数据更新时间: {new Date(latestCapital.updated_at).toLocaleString("zh-CN", { timeZone: "UTC" })} UTC (北京 {new Date(latestCapital.updated_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })})</p>
+          <p>数据更新时间: {new Date(latestCapital.updated_at).toLocaleString("zh-CN", { timeZone: "UTC" })} UTC</p>
         </header>
 
         <WindowTabs pathname="/" active={window} />
