@@ -77,6 +77,12 @@ body {
   border-color: var(--accent-2);
 }
 
+.navLinks a.active {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+  background: rgba(59, 130, 246, 0.08);
+}
+
 h1,
 h2,
 h3 {
