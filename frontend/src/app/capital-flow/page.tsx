@@ -113,7 +113,7 @@ export default async function CapitalFlowPage({ searchParams }: Props) {
           <article className="metricCard">
             <h3>强回流连续条件</h3>
             <strong>{String((capitalLatest.data.components?.is_strong_sustained as boolean) ? "满足" : "未满足")}</strong>
-            <small>规则: >=70 且连续 7 天不低于 60</small>
+            <small>规则: &gt;=70 且连续 7 天不低于 60</small>
           </article>
         </div>
 
