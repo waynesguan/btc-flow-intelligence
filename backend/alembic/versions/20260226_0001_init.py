@@ -17,8 +17,8 @@ down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-lead_lag_enum = sa.Enum("lead", "coincident", "lag", name="lead_lag_enum")
-metric_tier_enum = sa.Enum("must_have", "nice_to_have", name="metric_tier_enum")
+lead_lag_enum = sa.Enum("lead", "coincident", "lag", name="lead_lag_enum", create_type=False)
+metric_tier_enum = sa.Enum("must_have", "nice_to_have", name="metric_tier_enum", create_type=False)
 
 
 def upgrade() -> None:
