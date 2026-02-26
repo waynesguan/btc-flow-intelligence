@@ -36,7 +36,11 @@ class FarsideAdapter(SourceAdapter):
         if dataset != "us_spot_btc_etf_flows":
             return []
 
-        html = self._request_text(method="GET", url="https://farside.co.uk/btc/")
+        html = self._request_text(
+            method="GET",
+            url="https://farside.co.uk/btc/",
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"},
+        )
         soup = BeautifulSoup(html, "html.parser")
 
         table = None
