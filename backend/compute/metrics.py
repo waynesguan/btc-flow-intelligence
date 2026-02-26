@@ -45,19 +45,39 @@ class SeriesBucket:
         return self.values[left:right]
 
 
-REQUIRED_SERIES = [
+SERIES_IDS = [
     "etf.us_spot.netflow_total",
     "market.spot.btcusd.price_close",
     "market.spot.btcusd.price_coingecko",
+    "market.spot.btcusd.price_kraken",
+    "market.spot.btcusd.price_bitstamp",
+    "market.spot.btcusd.volume_coinbase",
+    "market.spot.btcusd.volume_kraken",
+    "market.spot.btcusd.volume_bitstamp",
+    "market.spot.btcusd.volume_total",
+    "market.spot.btcusd.market_cap",
     "stablecoin.usdt.market_cap",
     "stablecoin.usdc.market_cap",
-    "market.spot.btcusd.volume_coinbase",
-    "market.derivatives.open_interest_btc",
-    "market.derivatives.funding_rate",
+    "market.derivatives.open_interest_coingecko",
+    "market.derivatives.open_interest_deribit",
+    "market.derivatives.funding_rate_coingecko",
+    "market.derivatives.funding_rate_deribit",
+    "market.derivatives.basis_spread_deribit",
+    "market.derivatives.liquidation_volume_deribit",
     "macro.fed_balance_sheet.total_assets",
     "macro.dxy.broad",
     "macro.ust.2y_yield",
     "macro.ust.10y_yield",
+    "onchain.realized_cap",
+    "onchain.mvrv",
+    "onchain.realized_profit_loss",
+    "onchain.cost_basis",
+    "onchain.lth_supply",
+    "onchain.sth_supply",
+    "onchain.whale_balance",
+    "onchain.exchange_netflow",
+    "onchain.exchange_stablecoin_balance",
+    "onchain.stablecoin_btc_volume_share",
 ]
 
 
@@ -127,6 +147,29 @@ def _clip(value: float, min_v: float, max_v: float) -> float:
     return max(min_v, min(max_v, value))
 
 
+def _latest_avg(ts: datetime, buckets: list[SeriesBucket]) -> Optional[float]:
+    vals = [bucket.latest_at(ts) for bucket in buckets]
+    valid = [v for v in vals if v is not None]
+    if not valid:
+        return None
+    return sum(valid) / len(valid)
+
+
+def _latest_sum(ts: datetime, buckets: list[SeriesBucket]) -> Optional[float]:
+    vals = [bucket.latest_at(ts) for bucket in buckets]
+    valid = [v for v in vals if v is not None]
+    if not valid:
+        return None
+    return sum(valid)
+
+
+def _first_non_null(values: list[Optional[float]]) -> Optional[float]:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _upsert_metric_values(db: Session, rows: list[dict]) -> int:
     if not rows:
         return 0
@@ -162,12 +205,33 @@ def _update_available_since(db: Session, metric_ids: set[str]) -> None:
         )
 
 
+def _append_metric(
+    rows: list[dict],
+    touched: set[str],
+    metric_id: str,
+    ts: datetime,
+    value: Optional[float],
+    aux: dict,
+) -> None:
+    if value is None:
+        return
+    rows.append(
+        {
+            "metric_id": metric_id,
+            "ts": ts,
+            "value": value,
+            "aux": aux,
+        }
+    )
+    touched.add(metric_id)
+
+
 def compute_metrics(
     db: Session,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
 ) -> int:
-    series = _load_series(db=db, series_ids=REQUIRED_SERIES, start=start, end=end)
+    series = _load_series(db=db, series_ids=SERIES_IDS, start=start, end=end)
     etf_by_fund = _load_etf_by_fund(db=db, start=start, end=end)
 
     timeline: set[datetime] = set()
@@ -177,164 +241,235 @@ def compute_metrics(
     metric_rows: list[dict] = []
     touched_metric_ids: set[str] = set()
 
-    for ts in sorted(timeline):
-        etf_total = series.get("etf.us_spot.netflow_total", SeriesBucket([], [])).latest_at(ts)
-        if etf_total is not None:
-            metric_rows.append(
-                {
-                    "metric_id": "us_spot_etf_netflow_total",
-                    "ts": ts,
-                    "value": etf_total,
-                    "aux": {"unit": "USD_million"},
-                }
-            )
-            touched_metric_ids.add("us_spot_etf_netflow_total")
+    synthetic_volume = SeriesBucket([], [])
+    synthetic_realized_cap = SeriesBucket([], [])
 
-            metric_rows.append(
-                {
-                    "metric_id": "us_spot_etf_netflow_by_fund",
-                    "ts": ts,
-                    "value": etf_total,
-                    "aux": {
-                        "unit": "USD_million",
-                        "by_fund": etf_by_fund.get(ts, {}),
-                    },
-                }
-            )
-            touched_metric_ids.add("us_spot_etf_netflow_by_fund")
+    for ts in sorted(timeline):
+        # Dimension 2: ETF and institutional
+        etf_total = series.get("etf.us_spot.netflow_total", SeriesBucket([], [])).latest_at(ts)
+        by_fund = etf_by_fund.get(ts, {})
+
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "us_spot_etf_netflow_total",
+            ts,
+            etf_total,
+            {"unit": "USD_million"},
+        )
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "us_spot_etf_netflow_by_fund",
+            ts,
+            etf_total,
+            {"unit": "USD_million", "by_fund": by_fund},
+        )
+
+        grayscale_flow = None
+        for key, value in by_fund.items():
+            key_norm = key.lower()
+            if "grayscale" in key_norm or "gbtc" in key_norm:
+                grayscale_flow = float(value)
+                break
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "grayscale_holdings_change",
+            ts,
+            grayscale_flow,
+            {"unit": "USD_million", "source": "farside", "proxy": True},
+        )
 
         coinbase_price = series.get("market.spot.btcusd.price_close", SeriesBucket([], [])).latest_at(ts)
-        cg_price = series.get("market.spot.btcusd.price_coingecko", SeriesBucket([], [])).latest_at(ts)
-        if coinbase_price and cg_price:
-            premium = ((coinbase_price - cg_price) / cg_price) * 100
-            metric_rows.append(
+        ref_price = _latest_avg(
+            ts,
+            [
+                series.get("market.spot.btcusd.price_coingecko", SeriesBucket([], [])),
+                series.get("market.spot.btcusd.price_kraken", SeriesBucket([], [])),
+                series.get("market.spot.btcusd.price_bitstamp", SeriesBucket([], [])),
+            ],
+        )
+        if coinbase_price is not None and ref_price not in (None, 0):
+            premium = ((coinbase_price - ref_price) / ref_price) * 100
+            _append_metric(
+                metric_rows,
+                touched_metric_ids,
+                "coinbase_premium",
+                ts,
+                premium,
                 {
-                    "metric_id": "coinbase_premium",
-                    "ts": ts,
-                    "value": premium,
-                    "aux": {
-                        "coinbase_price": coinbase_price,
-                        "coingecko_price": cg_price,
-                        "unit": "pct",
-                    },
-                }
+                    "coinbase_price": coinbase_price,
+                    "reference_price": ref_price,
+                    "unit": "pct",
+                },
             )
-            touched_metric_ids.add("coinbase_premium")
+        else:
+            premium = None
 
-            basis_spread = coinbase_price - cg_price
-            metric_rows.append(
-                {
-                    "metric_id": "basis_spread",
-                    "ts": ts,
-                    "value": basis_spread,
-                    "aux": {
-                        "unit": "USD",
-                        "price_diff_pct": premium,
-                    },
-                }
-            )
-            touched_metric_ids.add("basis_spread")
-
+        # Dimension 3: stablecoin
         usdt_cap_bucket = series.get("stablecoin.usdt.market_cap")
         usdc_cap_bucket = series.get("stablecoin.usdc.market_cap")
-        if usdt_cap_bucket:
-            curr = usdt_cap_bucket.latest_at(ts)
-            prev = usdt_cap_bucket.latest_before_days(ts, 1)
-            change = _safe_change(curr, prev)
-            if change is not None:
-                metric_rows.append(
-                    {
-                        "metric_id": "usdt_supply_change",
-                        "ts": ts,
-                        "value": change,
-                        "aux": {"current": curr, "previous": prev, "unit": "pct"},
-                    }
-                )
-                touched_metric_ids.add("usdt_supply_change")
+        usdt_curr = usdt_cap_bucket.latest_at(ts) if usdt_cap_bucket else None
+        usdt_prev = usdt_cap_bucket.latest_before_days(ts, 1) if usdt_cap_bucket else None
+        usdc_curr = usdc_cap_bucket.latest_at(ts) if usdc_cap_bucket else None
+        usdc_prev = usdc_cap_bucket.latest_before_days(ts, 1) if usdc_cap_bucket else None
 
-        if usdc_cap_bucket:
-            curr = usdc_cap_bucket.latest_at(ts)
-            prev = usdc_cap_bucket.latest_before_days(ts, 1)
-            change = _safe_change(curr, prev)
-            if change is not None:
-                metric_rows.append(
-                    {
-                        "metric_id": "usdc_supply_change",
-                        "ts": ts,
-                        "value": change,
-                        "aux": {"current": curr, "previous": prev, "unit": "pct"},
-                    }
-                )
-                touched_metric_ids.add("usdc_supply_change")
+        usdt_change = _safe_change(usdt_curr, usdt_prev)
+        usdc_change = _safe_change(usdc_curr, usdc_prev)
 
-        volume_bucket = series.get("market.spot.btcusd.volume_coinbase")
-        if volume_bucket:
-            short_avg = _safe_avg(volume_bucket.window_values(ts, days=7))
-            long_avg = _safe_avg(volume_bucket.window_values(ts, days=30))
-            if short_avg is not None and long_avg not in (None, 0):
-                trend = ((short_avg - long_avg) / long_avg) * 100
-                metric_rows.append(
-                    {
-                        "metric_id": "spot_volume_trend",
-                        "ts": ts,
-                        "value": trend,
-                        "aux": {
-                            "avg_7d": short_avg,
-                            "avg_30d": long_avg,
-                            "unit": "pct",
-                        },
-                    }
-                )
-                touched_metric_ids.add("spot_volume_trend")
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "usdt_supply_change",
+            ts,
+            usdt_change,
+            {"current": usdt_curr, "previous": usdt_prev, "unit": "pct"},
+        )
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "usdc_supply_change",
+            ts,
+            usdc_change,
+            {"current": usdc_curr, "previous": usdc_prev, "unit": "pct"},
+        )
 
-        oi_bucket = series.get("market.derivatives.open_interest_btc")
-        fr_bucket = series.get("market.derivatives.funding_rate")
-        oi = oi_bucket.latest_at(ts) if oi_bucket else None
-        fr = fr_bucket.latest_at(ts) if fr_bucket else None
+        stable_net = None
+        if usdt_change is not None or usdc_change is not None:
+            stable_net = (usdt_change or 0.0) + (usdc_change or 0.0)
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "stablecoin_net_mint_burn",
+            ts,
+            stable_net,
+            {"unit": "pct", "proxy": True},
+        )
 
-        if oi is not None:
-            metric_rows.append(
-                {
-                    "metric_id": "futures_open_interest",
-                    "ts": ts,
-                    "value": oi,
-                    "aux": {"unit": "BTC"},
-                }
-            )
-            touched_metric_ids.add("futures_open_interest")
+        # Dimension 4: spot + derivatives
+        spot_volume = _latest_sum(
+            ts,
+            [
+                series.get("market.spot.btcusd.volume_coinbase", SeriesBucket([], [])),
+                series.get("market.spot.btcusd.volume_kraken", SeriesBucket([], [])),
+                series.get("market.spot.btcusd.volume_bitstamp", SeriesBucket([], [])),
+            ],
+        )
+        if spot_volume is None:
+            spot_volume = series.get("market.spot.btcusd.volume_total", SeriesBucket([], [])).latest_at(ts)
 
-        if fr is not None:
-            metric_rows.append(
-                {
-                    "metric_id": "funding_rate",
-                    "ts": ts,
-                    "value": fr,
-                    "aux": {"unit": "ratio"},
-                }
-            )
-            touched_metric_ids.add("funding_rate")
+        if spot_volume is not None:
+            if synthetic_volume.dates and synthetic_volume.dates[-1] == ts:
+                synthetic_volume.values[-1] = spot_volume
+            else:
+                synthetic_volume.dates.append(ts)
+                synthetic_volume.values.append(spot_volume)
+
+        short_avg = _safe_avg(synthetic_volume.window_values(ts, days=7))
+        long_avg = _safe_avg(synthetic_volume.window_values(ts, days=30))
+        spot_volume_trend = None
+        if short_avg is not None and long_avg not in (None, 0):
+            spot_volume_trend = ((short_avg - long_avg) / long_avg) * 100
+
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "spot_volume_trend",
+            ts,
+            spot_volume_trend,
+            {
+                "avg_7d": short_avg,
+                "avg_30d": long_avg,
+                "unit": "pct",
+            },
+        )
+
+        oi = _latest_sum(
+            ts,
+            [
+                series.get("market.derivatives.open_interest_coingecko", SeriesBucket([], [])),
+                series.get("market.derivatives.open_interest_deribit", SeriesBucket([], [])),
+            ],
+        )
+        fr = _first_non_null(
+            [
+                series.get("market.derivatives.funding_rate_deribit", SeriesBucket([], [])).latest_at(ts),
+                series.get("market.derivatives.funding_rate_coingecko", SeriesBucket([], [])).latest_at(ts),
+            ]
+        )
+
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "futures_open_interest",
+            ts,
+            oi,
+            {"unit": "BTC"},
+        )
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "funding_rate",
+            ts,
+            fr,
+            {"unit": "ratio"},
+        )
+
+        basis_spread = _first_non_null(
+            [
+                series.get("market.derivatives.basis_spread_deribit", SeriesBucket([], [])).latest_at(ts),
+                ((coinbase_price - ref_price) if coinbase_price is not None and ref_price is not None else None),
+            ]
+        )
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "basis_spread",
+            ts,
+            basis_spread,
+            {"unit": "USD"},
+        )
+
+        liquidation = series.get("market.derivatives.liquidation_volume_deribit", SeriesBucket([], [])).latest_at(ts)
+        if liquidation is None and oi is not None and fr is not None:
+            liquidation = abs(oi * fr * 1000)
+            liquidation_proxy = True
+        else:
+            liquidation_proxy = False
+
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "liquidation_volume",
+            ts,
+            liquidation,
+            {"unit": "USD", "proxy": liquidation_proxy},
+        )
 
         basis_pct = 0.0
-        basis_bucket = None
-        if coinbase_price and cg_price and cg_price != 0:
-            basis_pct = (coinbase_price - cg_price) / cg_price
-        if oi is not None or fr is not None:
-            leverage = (oi or 0.0) / 1000000.0 * 15 + abs(fr or 0.0) * 100000 + abs(basis_pct) * 400
-            leverage = _clip(leverage, 0, 100)
-            metric_rows.append(
-                {
-                    "metric_id": "leverage_risk_index",
-                    "ts": ts,
-                    "value": leverage,
-                    "aux": {
-                        "open_interest": oi,
-                        "funding_rate": fr,
-                        "basis_pct": basis_pct,
-                    },
-                }
-            )
-            touched_metric_ids.add("leverage_risk_index")
+        if basis_spread is not None and ref_price not in (None, 0):
+            basis_pct = basis_spread / ref_price
 
+        leverage = None
+        if oi is not None or fr is not None:
+            leverage = (oi or 0.0) / 1_000_000 * 15 + abs(fr or 0.0) * 100000 + abs(basis_pct) * 400
+            leverage = _clip(leverage, 0, 100)
+
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "leverage_risk_index",
+            ts,
+            leverage,
+            {
+                "open_interest": oi,
+                "funding_rate": fr,
+                "basis_pct": basis_pct,
+            },
+        )
+
+        # Dimension 5: macro
         walcl_bucket = series.get("macro.fed_balance_sheet.total_assets")
         dxy_bucket = series.get("macro.dxy.broad")
         dgs2_bucket = series.get("macro.ust.2y_yield")
@@ -343,74 +478,235 @@ def compute_metrics(
         walcl_now = walcl_bucket.latest_at(ts) if walcl_bucket else None
         walcl_prev_30 = walcl_bucket.latest_before_days(ts, 30) if walcl_bucket else None
         fed_change = _safe_change(walcl_now, walcl_prev_30)
-        if fed_change is not None:
-            metric_rows.append(
-                {
-                    "metric_id": "fed_balance_sheet_change",
-                    "ts": ts,
-                    "value": fed_change,
-                    "aux": {
-                        "current": walcl_now,
-                        "previous_30d": walcl_prev_30,
-                        "unit": "pct",
-                    },
-                }
-            )
-            touched_metric_ids.add("fed_balance_sheet_change")
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "fed_balance_sheet_change",
+            ts,
+            fed_change,
+            {
+                "current": walcl_now,
+                "previous_30d": walcl_prev_30,
+                "unit": "pct",
+            },
+        )
 
         dxy_now = dxy_bucket.latest_at(ts) if dxy_bucket else None
-        if dxy_now is not None:
-            metric_rows.append(
-                {
-                    "metric_id": "dxy",
-                    "ts": ts,
-                    "value": dxy_now,
-                    "aux": {"unit": "index"},
-                }
-            )
-            touched_metric_ids.add("dxy")
+        _append_metric(metric_rows, touched_metric_ids, "dxy", ts, dxy_now, {"unit": "index"})
 
         dgs2_now = dgs2_bucket.latest_at(ts) if dgs2_bucket else None
-        if dgs2_now is not None:
-            metric_rows.append(
-                {
-                    "metric_id": "ust_2y_yield",
-                    "ts": ts,
-                    "value": dgs2_now,
-                    "aux": {"unit": "pct"},
-                }
-            )
-            touched_metric_ids.add("ust_2y_yield")
+        _append_metric(metric_rows, touched_metric_ids, "ust_2y_yield", ts, dgs2_now, {"unit": "pct"})
 
         dgs10_now = dgs10_bucket.latest_at(ts) if dgs10_bucket else None
-        if dgs10_now is not None:
-            metric_rows.append(
-                {
-                    "metric_id": "ust_10y_yield",
-                    "ts": ts,
-                    "value": dgs10_now,
-                    "aux": {"unit": "pct"},
-                }
-            )
-            touched_metric_ids.add("ust_10y_yield")
+        _append_metric(metric_rows, touched_metric_ids, "ust_10y_yield", ts, dgs10_now, {"unit": "pct"})
 
         dxy_prev_30 = dxy_bucket.latest_before_days(ts, 30) if dxy_bucket else None
         dxy_change_30 = _safe_change(dxy_now, dxy_prev_30)
         if fed_change is not None or dxy_change_30 is not None:
             proxy = (fed_change or 0.0) - (dxy_change_30 or 0.0) * 1.5 - ((dgs10_now or 0.0) - (dgs2_now or 0.0))
-            metric_rows.append(
-                {
-                    "metric_id": "global_liquidity_proxy",
-                    "ts": ts,
-                    "value": proxy,
-                    "aux": {
-                        "fed_change_30d_pct": fed_change,
-                        "dxy_change_30d_pct": dxy_change_30,
-                        "yield_curve_spread": (dgs10_now or 0.0) - (dgs2_now or 0.0),
-                    },
-                }
-            )
-            touched_metric_ids.add("global_liquidity_proxy")
+        else:
+            proxy = None
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "global_liquidity_proxy",
+            ts,
+            proxy,
+            {
+                "fed_change_30d_pct": fed_change,
+                "dxy_change_30d_pct": dxy_change_30,
+                "yield_curve_spread": (dgs10_now or 0.0) - (dgs2_now or 0.0),
+            },
+        )
+
+        # Dimension 1: on-chain capital (Phase 3 + proxy fallbacks)
+        market_cap = series.get("market.spot.btcusd.market_cap", SeriesBucket([], [])).latest_at(ts)
+        realized_cap = _first_non_null(
+            [
+                series.get("onchain.realized_cap", SeriesBucket([], [])).latest_at(ts),
+                (market_cap * 0.65 if market_cap is not None else None),
+            ]
+        )
+        realized_cap_proxy = series.get("onchain.realized_cap", SeriesBucket([], [])).latest_at(ts) is None
+
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "realized_cap",
+            ts,
+            realized_cap,
+            {"unit": "USD", "proxy": realized_cap_proxy},
+        )
+
+        if realized_cap is not None:
+            if synthetic_realized_cap.dates and synthetic_realized_cap.dates[-1] == ts:
+                synthetic_realized_cap.values[-1] = realized_cap
+            else:
+                synthetic_realized_cap.dates.append(ts)
+                synthetic_realized_cap.values.append(realized_cap)
+
+        realized_cap_prev = synthetic_realized_cap.latest_before_days(ts, 1)
+        realized_cap_change = _safe_change(realized_cap, realized_cap_prev)
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "realized_cap_change",
+            ts,
+            realized_cap_change,
+            {"unit": "pct", "proxy": realized_cap_proxy},
+        )
+
+        market_cap_prev = series.get("market.spot.btcusd.market_cap", SeriesBucket([], [])).latest_before_days(ts, 1)
+        realized_profit_loss = _first_non_null(
+            [
+                series.get("onchain.realized_profit_loss", SeriesBucket([], [])).latest_at(ts),
+                ((market_cap - market_cap_prev) if market_cap is not None and market_cap_prev is not None else None),
+            ]
+        )
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "realized_profit_loss",
+            ts,
+            realized_profit_loss,
+            {
+                "unit": "USD",
+                "proxy": series.get("onchain.realized_profit_loss", SeriesBucket([], [])).latest_at(ts) is None,
+            },
+        )
+
+        mvrv = _first_non_null(
+            [
+                series.get("onchain.mvrv", SeriesBucket([], [])).latest_at(ts),
+                (market_cap / realized_cap if market_cap is not None and realized_cap not in (None, 0) else None),
+            ]
+        )
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "mvrv",
+            ts,
+            mvrv,
+            {"unit": "ratio", "proxy": series.get("onchain.mvrv", SeriesBucket([], [])).latest_at(ts) is None},
+        )
+
+        cost_basis = _first_non_null(
+            [
+                series.get("onchain.cost_basis", SeriesBucket([], [])).latest_at(ts),
+                (realized_cap / (market_cap / ref_price) if market_cap not in (None, 0) and ref_price else None),
+            ]
+        )
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "cost_basis_distribution",
+            ts,
+            cost_basis,
+            {
+                "unit": "USD",
+                "proxy": series.get("onchain.cost_basis", SeriesBucket([], [])).latest_at(ts) is None,
+                "distribution_bins": [],
+            },
+        )
+
+        lth_supply = series.get("onchain.lth_supply", SeriesBucket([], [])).latest_at(ts)
+        sth_supply = series.get("onchain.sth_supply", SeriesBucket([], [])).latest_at(ts)
+        lth_sth = None
+        if lth_supply is not None and sth_supply not in (None, 0):
+            lth_sth = lth_supply / sth_supply
+            proxy_lth = False
+        elif realized_cap_change is not None:
+            lth_sth = 1 + realized_cap_change / 100
+            proxy_lth = True
+        else:
+            proxy_lth = True
+
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "lth_sth_behavior",
+            ts,
+            lth_sth,
+            {"unit": "ratio", "proxy": proxy_lth},
+        )
+
+        whale_balance_bucket = series.get("onchain.whale_balance")
+        whale_now = whale_balance_bucket.latest_at(ts) if whale_balance_bucket else None
+        whale_prev = whale_balance_bucket.latest_before_days(ts, 1) if whale_balance_bucket else None
+        whale_accum = _safe_change(whale_now, whale_prev)
+        if whale_accum is None and etf_total is not None:
+            whale_accum = etf_total / 1000
+            whale_proxy = True
+        else:
+            whale_proxy = whale_now is None
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "whale_accumulation",
+            ts,
+            whale_accum,
+            {"unit": "pct", "proxy": whale_proxy},
+        )
+
+        exchange_netflow = series.get("onchain.exchange_netflow", SeriesBucket([], [])).latest_at(ts)
+        if exchange_netflow is None and spot_volume_trend is not None:
+            exchange_netflow = -spot_volume_trend
+            exchange_proxy = True
+        else:
+            exchange_proxy = False
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "exchange_netflow",
+            ts,
+            exchange_netflow,
+            {"unit": "BTC", "proxy": exchange_proxy},
+        )
+
+        inst_proxy = None
+        if etf_total is not None or premium is not None or oi is not None:
+            inst_proxy = 50 + (etf_total or 0) * 0.08 + (premium or 0) * 5 + (oi or 0) / 2_000_000
+            inst_proxy = _clip(inst_proxy, 0, 100)
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "institution_position_proxy",
+            ts,
+            inst_proxy,
+            {"unit": "index", "proxy": True},
+        )
+
+        exch_stable = series.get("onchain.exchange_stablecoin_balance", SeriesBucket([], [])).latest_at(ts)
+        exch_stable_prev = series.get("onchain.exchange_stablecoin_balance", SeriesBucket([], [])).latest_before_days(ts, 1)
+        exch_stable_change = _safe_change(exch_stable, exch_stable_prev)
+        if exch_stable_change is None and stable_net is not None:
+            exch_stable_change = stable_net * 0.6
+            exch_stable_proxy = True
+        else:
+            exch_stable_proxy = False
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "exchange_stablecoin_balance_change",
+            ts,
+            exch_stable_change,
+            {"unit": "pct", "proxy": exch_stable_proxy},
+        )
+
+        stablecoin_share = series.get("onchain.stablecoin_btc_volume_share", SeriesBucket([], [])).latest_at(ts)
+        if stablecoin_share is None and market_cap not in (None, 0):
+            stablecoin_share = ((usdt_curr or 0.0) + (usdc_curr or 0.0)) / market_cap * 100
+            stablecoin_share_proxy = True
+        else:
+            stablecoin_share_proxy = False
+        _append_metric(
+            metric_rows,
+            touched_metric_ids,
+            "stablecoin_btc_volume_share",
+            ts,
+            stablecoin_share,
+            {"unit": "pct", "proxy": stablecoin_share_proxy},
+        )
 
     affected = _upsert_metric_values(db=db, rows=metric_rows)
     _update_available_since(db=db, metric_ids=touched_metric_ids)

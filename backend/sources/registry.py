@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from config.settings import get_settings
 from sources.base import SourceAdapter
 from sources.bitstamp import BitstampAdapter
 from sources.coin_metrics import CoinMetricsAdapter
@@ -11,6 +12,8 @@ from sources.fred import FredAdapter
 from sources.glassnode import GlassnodeAdapter
 from sources.kraken import KrakenAdapter
 
+settings = get_settings()
+
 
 def get_phase1_sources() -> list[SourceAdapter]:
     return [
@@ -21,14 +24,35 @@ def get_phase1_sources() -> list[SourceAdapter]:
     ]
 
 
-def get_all_sources() -> list[SourceAdapter]:
+def get_phase2_sources() -> list[SourceAdapter]:
     return [
-        *get_phase1_sources(),
-        # Phase 2 placeholders (TODO adapters)
         KrakenAdapter(),
         BitstampAdapter(),
         DeribitAdapter(),
-        # Phase 3 paid placeholders
+    ]
+
+
+def get_phase3_sources() -> list[SourceAdapter]:
+    sources: list[SourceAdapter] = []
+    if settings.glassnode_api_key:
+        sources.append(GlassnodeAdapter())
+    if settings.coin_metrics_api_key:
+        sources.append(CoinMetricsAdapter())
+    return sources
+
+
+def get_active_sources() -> list[SourceAdapter]:
+    return [
+        *get_phase1_sources(),
+        *get_phase2_sources(),
+        *get_phase3_sources(),
+    ]
+
+
+def get_all_sources() -> list[SourceAdapter]:
+    return [
+        *get_phase1_sources(),
+        *get_phase2_sources(),
         GlassnodeAdapter(),
         CoinMetricsAdapter(),
     ]

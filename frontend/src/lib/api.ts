@@ -16,6 +16,23 @@ export type SeriesPoint = {
   components?: Record<string, unknown>;
 };
 
+export type MetricCatalogRow = {
+  metric_id: string;
+  name: string;
+  dimension: number;
+  lead_lag: string;
+  definition_short: string;
+  definition_pro: string;
+  calc_spec: { formula?: string; inputs?: string[] };
+  source_priority: { sources?: string[] };
+  refresh_policy: Record<string, unknown>;
+  failure_modes: Record<string, unknown>;
+  chart_spec: { unit?: string };
+  tier: string;
+  version: number;
+  available_since: string | null;
+};
+
 export type TimeWindow = "7D" | "30D" | "90D" | "1Y" | "ALL";
 
 export const WINDOW_OPTIONS: TimeWindow[] = ["7D", "30D", "90D", "1Y", "ALL"];
@@ -105,6 +122,24 @@ export async function getCapitalInflowSeries(window: TimeWindow = "ALL") {
   );
 }
 
+export async function getStructureRiskSeries(window: TimeWindow = "ALL") {
+  return fetchJson<ApiEnvelope<{ score_id: string; series: SeriesPoint[] }>>(
+    withQuery("/scores/structure_risk", {
+      granularity: "daily",
+      start: windowStartIso(window)
+    })
+  );
+}
+
+export async function getScoreSeries(scoreId: string, window: TimeWindow = "ALL") {
+  return fetchJson<ApiEnvelope<{ score_id: string; series: SeriesPoint[] }>>(
+    withQuery(`/scores/${scoreId}`, {
+      granularity: "daily",
+      start: windowStartIso(window)
+    })
+  );
+}
+
 export async function getLatestStage() {
   return fetchJson<
     ApiEnvelope<{
@@ -116,6 +151,26 @@ export async function getLatestStage() {
       evidence: Record<string, unknown>;
     }>
   >("/stage/latest");
+}
+
+export async function getStageStats(window: TimeWindow = "ALL") {
+  return fetchJson<
+    ApiEnvelope<{
+      stage_days: Array<{ stage_id: number; stage_name: string; days: number }>;
+      stage_switches: number;
+      score_distribution: Record<string, Record<string, number>>;
+      multi_cycle_overlay: Array<{
+        label: string;
+        start_ts: string;
+        end_ts: string;
+        points: Array<{ step: number; capital: number; risk: number | null; stage_id: number | null }>;
+      }>;
+    }>
+  >(
+    withQuery("/stage/stats", {
+      start: windowStartIso(window)
+    })
+  );
 }
 
 export async function getMetricSeries(metricId: string, window: TimeWindow = "ALL") {
@@ -134,7 +189,7 @@ export async function getMetricSeries(metricId: string, window: TimeWindow = "AL
 
 export async function getMetricCatalog(tier?: string) {
   const query = tier ? `?tier=${tier}` : "";
-  return fetchJson<ApiEnvelope<Array<Record<string, unknown>>>>(`/metrics/catalog${query}`);
+  return fetchJson<ApiEnvelope<MetricCatalogRow[]>>(`/metrics/catalog${query}`);
 }
 
 export function browserApiBase(): string {
