@@ -70,6 +70,7 @@ class FarsideAdapter(SourceAdapter):
             return []
 
         observations: list[SourceObservation] = []
+        seen_ts: set[datetime] = set()
 
         for row in rows:
             cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
@@ -83,6 +84,10 @@ class FarsideAdapter(SourceAdapter):
             ts = self._try_parse_date(date_raw)
             if ts is None:
                 continue
+            # Skip duplicate dates (e.g. weekly summary rows)
+            if ts in seen_ts:
+                continue
+            seen_ts.add(ts)
             # Build row_map: zip up to min of headers/cells length
             row_map = dict(zip(headers, cells))
             by_fund = {}
