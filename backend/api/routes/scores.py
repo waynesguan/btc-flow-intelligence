@@ -119,6 +119,16 @@ def capital_inflow_range(
     return score_range(score_id="capital_inflow_score", start=start, end=end, granularity=granularity, db=db)
 
 
+@router.get("/structure_risk")
+def structure_risk_range(
+    start: Optional[datetime] = Query(default=None),
+    end: Optional[datetime] = Query(default=None),
+    granularity: str = Query(default="daily"),
+    db: Session = Depends(get_db),
+) -> dict:
+    return score_range(score_id="structure_risk_score", start=start, end=end, granularity=granularity, db=db)
+
+
 @router.get("/{score_id}")
 def score_range(
     score_id: str,
