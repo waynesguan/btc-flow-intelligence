@@ -36,8 +36,7 @@ def get_phase3_sources() -> list[SourceAdapter]:
     sources: list[SourceAdapter] = []
     if settings.glassnode_api_key:
         sources.append(GlassnodeAdapter())
-    if settings.coin_metrics_api_key:
-        sources.append(CoinMetricsAdapter())
+    sources.append(CoinMetricsAdapter())
     return sources
 
 

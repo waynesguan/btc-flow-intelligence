@@ -35,25 +35,31 @@ class CoinMetricsAdapter(SourceAdapter):
     ) -> list[SourceObservation]:
         if dataset != "onchain_core":
             return []
-        if not settings.coin_metrics_api_key:
-            raise RuntimeError("COIN_METRICS_API_KEY is required for coin_metrics ingestion")
+
+        has_key = bool(settings.coin_metrics_api_key)
+
+        if has_key:
+            base_url = "https://api.coinmetrics.io/v4/timeseries/asset-metrics"
+            metrics = "CapRealUSD,CapMVRVCur,PriceUSD,CapMrktCurUSD"
+        else:
+            base_url = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+            metrics = "CapMVRVCur,PriceUSD,CapMrktCurUSD"
 
         end_dt = end or datetime.now(timezone.utc)
         start_dt = start or (end_dt - timedelta(days=365 * 5))
 
-        rows = self._request_json(
-            method="GET",
-            url="https://api.coinmetrics.io/v4/timeseries/asset-metrics",
-            params={
-                "assets": "btc",
-                "metrics": "CapRealUSD,CapMVRVCur,PriceUSD,CapMrktCurUSD",
-                "start_time": start_dt.isoformat().replace("+00:00", "Z"),
-                "end_time": end_dt.isoformat().replace("+00:00", "Z"),
-                "frequency": "1d",
-                "page_size": 10000,
-                "api_key": settings.coin_metrics_api_key,
-            },
-        )
+        params: dict[str, object] = {
+            "assets": "btc",
+            "metrics": metrics,
+            "start_time": start_dt.isoformat().replace("+00:00", "Z"),
+            "end_time": end_dt.isoformat().replace("+00:00", "Z"),
+            "frequency": "1d",
+            "page_size": 10000,
+        }
+        if has_key:
+            params["api_key"] = settings.coin_metrics_api_key
+
+        rows = self._request_json(method="GET", url=base_url, params=params)
 
         observations: list[SourceObservation] = []
         for row in rows.get("data", []):
@@ -62,6 +68,10 @@ class CoinMetricsAdapter(SourceAdapter):
             mvrv = self._to_float(row.get("CapMVRVCur"))
             market_cap = self._to_float(row.get("CapMrktCurUSD"))
             price = self._to_float(row.get("PriceUSD"))
+
+            # Derive realized_cap from market_cap / MVRV when not directly available
+            if realized_cap is None and market_cap is not None and mvrv is not None and mvrv != 0:
+                realized_cap = market_cap / mvrv
 
             payload = {
                 "realized_cap": realized_cap,
