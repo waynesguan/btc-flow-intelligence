@@ -23,6 +23,7 @@ coverage/
 .idea/
 .vscode/
 .claude/
+CLAUDE.md
 
 # Logs
 *.log
