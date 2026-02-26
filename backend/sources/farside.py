@@ -73,19 +73,18 @@ class FarsideAdapter(SourceAdapter):
 
         for row in rows:
             cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
-            if not cells or len(cells) != len(headers):
+            if not cells:
                 continue
-            row_map = dict(zip(headers, cells))
-            date_raw = row_map.get("Date")
+            # Use first cell as date regardless of row length
+            date_raw = cells[0]
             if not date_raw:
                 continue
-            # Skip non-date rows (e.g. Fee row)
-            try:
-                self._parse_date(date_raw)
-            except Exception:
+            # Skip rows where first cell is not a parseable date
+            ts = self._try_parse_date(date_raw)
+            if ts is None:
                 continue
-
-            ts = self._parse_date(date_raw)
+            # Build row_map: zip up to min of headers/cells length
+            row_map = dict(zip(headers, cells))
             by_fund = {}
             total = 0.0
             for key, value in row_map.items():
@@ -118,13 +117,17 @@ class FarsideAdapter(SourceAdapter):
 
         return self.bounded(observations, start=start, end=end)
 
-    def _parse_date(self, value: str) -> datetime:
+    def _try_parse_date(self, value: str) -> Optional[datetime]:
         for fmt in ("%d %b %Y", "%Y-%m-%d", "%d/%m/%Y", "%d %B %Y"):
             try:
                 return datetime.strptime(value, fmt).replace(tzinfo=self.utc_now().tzinfo)
             except ValueError:
                 continue
-        return self.utc_now()
+        return None
+
+    def _parse_date(self, value: str) -> datetime:
+        result = self._try_parse_date(value)
+        return result if result is not None else self.utc_now()
 
     @staticmethod
     def _parse_amount(value: str) -> float:
