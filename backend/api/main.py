@@ -71,8 +71,9 @@ app.add_middleware(
 
 @app.middleware("http")
 async def disclaimer_header(request: Request, call_next):
+    from urllib.parse import quote
     response = await call_next(request)
-    response.headers["X-Disclaimer"] = settings.disclaimer_text
+    response.headers["X-Disclaimer"] = quote(settings.disclaimer_text)
     response.headers["X-Data-Policy"] = "Informational only; not investment advice"
     return response
 
