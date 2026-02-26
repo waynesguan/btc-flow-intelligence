@@ -1,0 +1,26 @@
+version: 1
+
+capital_inflow_score:
+  weights:
+    etf_institutional: 0.30
+    onchain_capital: 0.25
+    stablecoin: 0.20
+    spot_derivatives: 0.15
+    macro: 0.10
+  thresholds:
+    strong_inflow: 70
+    strong_inflow_sustained_days: 7
+    strong_inflow_min_during_sustained: 60
+    weak_inflow_min: 40
+  normalization: "z-score"
+
+structure_risk_score:
+  weights:
+    leverage: 0.35
+    liquidation: 0.25
+    basis: 0.20
+    trend: 0.20
+  thresholds:
+    high_risk: 70
+    moderate_risk: 40
+  normalization: "z-score"

@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Optional
+
+from bs4 import BeautifulSoup
+
+from sources.base import SourceAdapter, SourceObservation
+
+logger = logging.getLogger(__name__)
+
+
+class FarsideAdapter(SourceAdapter):
+    source_id = "farside"
+    auth_type = "none"
+    rate_limit = {"requests_per_minute": 30}
+    max_history_depth = "all"
+    field_mapping = {
+        "Date": "ts",
+        "Total": "total_netflow",
+    }
+    ts_spec = "Daily ETF flow date normalized to UTC midnight"
+    retry_policy = {"max_retries": 3, "backoff": "exponential"}
+
+    @property
+    def datasets(self) -> list[str]:
+        return ["us_spot_btc_etf_flows"]
+
+    def fetch(
+        self,
+        dataset: str,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> list[SourceObservation]:
+        if dataset != "us_spot_btc_etf_flows":
+            return []
+
+        html = self._request_text(method="GET", url="https://farside.co.uk/btc/")
+        soup = BeautifulSoup(html, "html.parser")
+
+        table = None
+        for candidate in soup.find_all("table"):
+            headers = [th.get_text(strip=True) for th in candidate.find_all("th")]
+            header_set = {h.lower() for h in headers}
+            if "date" in header_set and ("total" in header_set or "ibit" in header_set):
+                table = candidate
+                break
+        if table is None:
+            logger.warning("farside_table_not_found")
+            return []
+
+        headers = [th.get_text(strip=True) for th in table.find_all("th")]
+        observations: list[SourceObservation] = []
+
+        for row in table.find_all("tr"):
+            cells = [td.get_text(strip=True) for td in row.find_all("td")]
+            if not cells or len(cells) != len(headers):
+                continue
+            row_map = dict(zip(headers, cells))
+            date_raw = row_map.get("Date")
+            if not date_raw:
+                continue
+
+            ts = self._parse_date(date_raw)
+            by_fund = {}
+            total = 0.0
+            for key, value in row_map.items():
+                key_lower = key.lower()
+                if key_lower in {"date", "total"}:
+                    continue
+                amount = self._parse_amount(value)
+                by_fund[key] = amount
+                total += amount
+
+            total_cell = row_map.get("Total")
+            if total_cell:
+                parsed_total = self._parse_amount(total_cell)
+                if parsed_total != 0:
+                    total = parsed_total
+
+            observations.append(
+                SourceObservation(
+                    source_id=self.source_id,
+                    dataset=dataset,
+                    symbol="US_BTC_SPOT_ETF",
+                    ts=ts,
+                    payload={
+                        "total_netflow_usd_million": total,
+                        "by_fund_usd_million": by_fund,
+                        "unit": "USD_million",
+                    },
+                )
+            )
+
+        return self.bounded(observations, start=start, end=end)
+
+    def _parse_date(self, value: str) -> datetime:
+        for fmt in ("%d %b %Y", "%Y-%m-%d", "%d/%m/%Y", "%d %B %Y"):
+            try:
+                return datetime.strptime(value, fmt).replace(tzinfo=self.utc_now().tzinfo)
+            except ValueError:
+                continue
+        return self.utc_now()
+
+    @staticmethod
+    def _parse_amount(value: str) -> float:
+        cleaned = value.replace(",", "").replace("$", "").replace("(", "-").replace(")", "")
+        cleaned = cleaned.replace("+", "").strip()
+        if cleaned in {"", "-", "--", "n/a", "N/A"}:
+            return 0.0
+        try:
+            return float(cleaned)
+        except ValueError:
+            return 0.0
