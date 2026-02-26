@@ -2,12 +2,12 @@
 
 实时追踪 BTC 资金流入/流出、市场结构变化、趋势状态与宏观背景，给出可复核的市场阶段结论。
 
-Phase 1 MVP 已完整可运行：4 个免费数据源 → 16 个指标 → 2 项评分 → 7 阶段状态机 → 前端看板。
+当前版本已覆盖 Phase 1/2/3 目标：免费 + 扩展 + 付费数据源 → must_have + nice_to_have 指标 → 2 项评分 + 7 阶段状态机 + 回测面板 → 前端 5 页面看板。
 
 ## 架构总览
 
 ```text
-Source (FRED / Coinbase / Farside / CoinGecko)
+Source (FRED / Coinbase / Farside / CoinGecko / Kraken / Bitstamp / Deribit / Glassnode / Coin Metrics)
   │
   ▼
 Ingest ──► raw_observations (jsonb)
@@ -16,7 +16,7 @@ Ingest ──► raw_observations (jsonb)
 Normalize ──► normalized_series (统一 series_id / ts / value)
   │
   ▼
-Compute Metrics ──► metric_values (16 个 must_have 指标)
+Compute Metrics ──► metric_values (must_have + nice_to_have 全量计算)
   │
   ▼
 Compute Scores ──► scores (capital_inflow_score + structure_risk_score)
@@ -53,17 +53,17 @@ btcObserver/
 │   │   ├── coinbase.py             # Phase 1 - 现货价格与成交量
 │   │   ├── farside.py              # Phase 1 - ETF 日度净流入
 │   │   ├── coingecko.py            # Phase 1 - BTC 市场/稳定币/衍生品
-│   │   ├── kraken.py               # Phase 2 占位
-│   │   ├── bitstamp.py             # Phase 2 占位
-│   │   ├── deribit.py              # Phase 2 占位
-│   │   ├── glassnode.py            # Phase 3 占位 (需付费 Key)
-│   │   └── coin_metrics.py         # Phase 3 占位 (需付费 Key)
+│   │   ├── kraken.py               # 现货补充数据源
+│   │   ├── bitstamp.py             # 现货补充数据源
+│   │   ├── deribit.py              # 衍生品 OI/Funding/Basis/Liquidation
+│   │   ├── glassnode.py            # 付费链上数据源 (API Key)
+│   │   └── coin_metrics.py         # 付费链上数据源 (API Key)
 │   ├── ingest/
 │   │   └── ingester.py             # 原始数据拉取 + UPSERT 落库
 │   ├── normalize/
 │   │   └── normalizer.py           # 字段统一 → normalized_series
 │   ├── compute/
-│   │   ├── metrics.py              # 16 个 must_have 指标计算
+│   │   ├── metrics.py              # must_have + nice_to_have 指标计算
 │   │   ├── scoring.py              # 评分系统 (z-score + 权重归一化)
 │   │   └── stage.py                # 7 阶段状态机
 │   ├── scheduler/
@@ -84,9 +84,9 @@ btcObserver/
 │   │   ├── app/
 │   │   │   ├── page.tsx            # 概览页 (两大评分 + 阶段 + 图表)
 │   │   │   ├── macro/page.tsx      # 宏观页 (Fed/DXY/收益率曲线)
-│   │   │   ├── metrics/page.tsx    # 指标详情页 (catalog 表格)
-│   │   │   ├── capital-flow/page.tsx    # 资金流页 (Phase 2)
-│   │   │   ├── structure-risk/page.tsx  # 结构风险页 (Phase 2)
+│   │   │   ├── metrics/page.tsx    # 指标详情页 (可点击展开 + 回测面板)
+│   │   │   ├── capital-flow/page.tsx    # 资金流页 (ETF/稳定币/评分分解)
+│   │   │   ├── structure-risk/page.tsx  # 结构风险页 (杠杆/基差/清算/评分分解)
 │   │   │   ├── disclaimer/page.tsx # 免责声明
 │   │   │   ├── error.tsx           # 全局错误边界
 │   │   │   ├── loading.tsx         # 加载状态
@@ -140,7 +140,10 @@ cp .env.example .env
 # 3. 一键启动
 docker compose up -d --build
 
-# 4. 验证服务
+# 4. (可选) 启用 Nginx 反向代理
+docker compose --profile proxy up -d nginx
+
+# 5. 验证服务
 curl http://localhost:8000/health          # 后端健康检查
 curl http://localhost:8000/sources/status   # 数据源状态
 open http://localhost:3000                  # 前端看板
@@ -171,9 +174,9 @@ Backend 容器启动后自动执行：
 |---|---|---|---|
 | `/` | 概览 | Phase 1 完成 | Capital Inflow Score + Structure Risk Score + 当前阶段 + 时序图表 |
 | `/macro` | 宏观 | Phase 1 完成 | Fed 资产负债表变化、DXY、2Y vs 10Y 收益率利差 |
-| `/metrics` | 指标详情 | Phase 1 完成 | must_have 指标 catalog 表格 (维度/领先性/来源/公式) |
-| `/capital-flow` | 资金流 | Phase 2 待实现 | ETF 分基金流入、稳定币流动性、评分分解 |
-| `/structure-risk` | 结构风险 | Phase 2 待实现 | 杠杆风险、基差、清算、评分分解 |
+| `/metrics` | 指标详情 | 已完成 | 点击指标展开时序图 + 阶段统计面板 + 多周期叠加图 |
+| `/capital-flow` | 资金流 | 已完成 | ETF 分基金流入、稳定币流动性、评分分解 |
+| `/structure-risk` | 结构风险 | 已完成 | 杠杆风险、基差、清算代理、评分分解 |
 | `/disclaimer` | 免责声明 | 完成 | 法律免责文本 |
 
 所有页面支持时间窗口切换：**7D / 30D / 90D / 1Y / ALL**
@@ -213,11 +216,11 @@ Backend 容器启动后自动执行：
 | Coinbase | `coinbase` | 无需 | 1 年 | 每 30 分钟 | 1 |
 | Farside Investors | `farside` | 无需 (网页抓取) | 全量 (ETF 上市以来) | 每 30 分钟 | 1 |
 | CoinGecko | `coingecko` | 可选 Key | 365 天 | 每 30 分钟 | 1 |
-| Kraken | `kraken` | 无需 | — | — | 2 (占位) |
-| Bitstamp | `bitstamp` | 无需 | — | — | 2 (占位) |
-| Deribit | `deribit` | 无需 | — | — | 2 (占位) |
-| Glassnode | `glassnode` | 付费 Key | 全量 | — | 3 (占位) |
-| Coin Metrics | `coin_metrics` | 付费 Key | 全量 | — | 3 (占位) |
+| Kraken | `kraken` | 无需 | 1 年 | 每 30 分钟 | 2 |
+| Bitstamp | `bitstamp` | 无需 | 3 年 | 每 30 分钟 | 2 |
+| Deribit | `deribit` | 无需 | 快照 + 调度累积 | 每 15 分钟 | 2 |
+| Glassnode | `glassnode` | 付费 Key | 全量 | 每 30 分钟 | 3 |
+| Coin Metrics | `coin_metrics` | 付费 Key | 全量 | 每 30 分钟 | 3 |
 
 每个适配器声明：`source_id`、`auth_type`、`rate_limit`、`max_history_depth`、`field_mapping`、`ts_spec`、`retry_policy`。
 
@@ -258,9 +261,9 @@ Backend 容器启动后自动执行：
 | | `ust_10y_yield` | coincident | FRED (DGS10) |
 | | `global_liquidity_proxy` | lead | 合成 (Fed + DXY + 利差) |
 
-维度 1 (链上资本) 的 8 个指标标记为 `nice_to_have`，需 Glassnode/Coin Metrics 付费 Key，在 Phase 3 激活。
+维度 1 (链上资本) 的 `nice_to_have` 指标已接入计算链路：有付费数据源时优先用真实值，缺失时会明确标注 `proxy` 并自动退化。
 
-另有 10 个 `nice_to_have` 指标 (交易所稳定币余额、清算量等) 已在 `metric_catalog` 中定义，待对应数据源接入。
+其余 `nice_to_have` 指标（交易所稳定币余额、清算量、机构仓位代理等）已纳入计算逻辑，并在数据不足时通过 `aux.proxy=true` 明确标记。
 
 ## 评分系统
 
@@ -273,7 +276,7 @@ Backend 容器启动后自动执行：
 | 组件 | 权重 | 来源指标 |
 |---|---|---|
 | etf_institutional | 0.30 | `us_spot_etf_netflow_total` |
-| onchain_capital | 0.25 | Phase 3 (链上付费数据) |
+| onchain_capital | 0.25 | `realized_cap_change` + `whale_accumulation` + `exchange_netflow` |
 | stablecoin | 0.20 | `usdt_supply_change` + `usdc_supply_change` |
 | spot_derivatives | 0.15 | `spot_volume_trend` + `funding_rate` + `basis_spread` |
 | macro | 0.10 | `fed_balance_sheet_change` + `dxy` |
@@ -295,7 +298,7 @@ Backend 容器启动后自动执行：
 | 组件 | 权重 | 来源指标 |
 |---|---|---|
 | leverage | 0.35 | `leverage_risk_index` |
-| liquidation | 0.25 | 基于 `funding_rate` 代理 |
+| liquidation | 0.25 | `liquidation_volume` (缺失时退化到 funding 代理) |
 | basis | 0.20 | `basis_spread` |
 | trend | 0.20 | `spot_volume_trend` (反向) |
 
@@ -330,9 +333,9 @@ Backend 容器启动后自动执行：
 
 | 任务 | 频率 | 说明 |
 |---|---|---|
-| `ingest_all` | 每 30 分钟 | 拉取 4 个 Phase 1 数据源最新数据 |
+| `ingest_all` | 每 30 分钟 | 拉取所有已启用数据源（免费 + 扩展 + 付费） |
 | `normalize_all` | 每 30 分钟 | 原始数据规范化写入 normalized_series |
-| `compute_metrics` | 每 15 分钟 | 计算 16 个 must_have 指标 |
+| `compute_metrics` | 每 15 分钟 | 计算 must_have + nice_to_have 指标 |
 | `compute_scores_stage` | 每 15 分钟 | 计算两项评分 + 阶段判定 |
 
 首次启动的 bootstrap 是一次性的全量 backfill，后续由定时任务增量更新。
@@ -350,10 +353,12 @@ Backend 容器启动后自动执行：
 | GET | `/scores/capital_inflow/latest` | 最新 Capital Inflow Score + 等级 |
 | GET | `/scores/structure_risk/latest` | 最新 Structure Risk Score + 风险等级 |
 | GET | `/scores/capital_inflow?start=&end=&granularity=` | Capital Inflow 时序 |
+| GET | `/scores/structure_risk?start=&end=&granularity=` | Structure Risk 时序 |
 | GET | `/scores/{score_id}?start=&end=&granularity=` | 任意评分时序 |
 | GET | `/stage/latest` | 最新阶段判定 |
 | GET | `/stage?start=&end=` | 历史阶段序列 |
 | GET | `/stage/explain?ts=` | 指定时间点阶段解释 (含 evidence) |
+| GET | `/stage/stats?start=&end=` | 阶段累计天数、切换次数、评分分布、多周期叠加 |
 
 **统一响应格式**：
 
@@ -383,6 +388,7 @@ services:
   redis:     # Redis 7 Alpine, 端口 6379
   backend:   # Python 3.11 + FastAPI, 端口 8000
   frontend:  # Node 20 + Next.js 14, 端口 3000
+  nginx:     # 可选 profile=proxy, 端口 80 反向代理 frontend/backend
 ```
 
 `backend` 依赖 `db` 和 `redis` 健康检查通过后才启动。
@@ -434,35 +440,23 @@ docker compose logs db
 
 ## 分阶段路线图
 
-### Phase 1 (当前 - 已完成)
+### 已完成项 (Phase 1 + 2 + 3)
 
 - [x] 后端框架 + DB + Alembic 迁移
-- [x] 4 个免费数据源适配器 (FRED / Coinbase / Farside / CoinGecko)
-- [x] 16 个 must_have 指标计算
-- [x] 评分系统 (capital_inflow + structure_risk)
-- [x] 7 阶段状态机
-- [x] 全部 API 端点
+- [x] 免费数据源适配器: FRED / Coinbase / Farside / CoinGecko
+- [x] 扩展数据源适配器: Kraken / Bitstamp / Deribit
+- [x] 付费数据源适配器: Glassnode / Coin Metrics (按 API Key 启用)
+- [x] must_have + nice_to_have 指标计算链路
+- [x] 评分系统 (capital_inflow + structure_risk + onchain_capital 真实组件)
+- [x] 7 阶段状态机 + 阶段解释
+- [x] 回测增强: 阶段累计天数/切换次数/评分分布/多周期叠加
+- [x] 全部 API 端点 + 速率限制 + 缓存
 - [x] Docker Compose 一键启动
 - [x] 首次启动自动 backfill (后台线程)
-- [x] 前端: 概览页 + 宏观页 + 指标详情页 (真实数据图表)
+- [x] 前端 5 页面完整可访问 (概览/资金流/结构风险/宏观/指标详情)
+- [x] 指标详情页点击展开时序图
 - [x] 时间窗口选择器 (7D/30D/90D/1Y/ALL)
-- [x] 错误边界 + 加载状态
-
-### Phase 2 (待实现)
-
-- [ ] 前端资金流页: ETF 分基金柱状图、稳定币流动性、评分分解
-- [ ] 前端结构风险页: 杠杆风险、基差、清算代理、评分分解
-- [ ] Kraken / Bitstamp / Deribit 适配器
-- [ ] Nginx 反向代理配置
-- [ ] 指标详情页: 单指标点击展开时序图表
-
-### Phase 3 (待实现)
-
-- [ ] Glassnode 适配器 (链上资本维度完整激活)
-- [ ] Coin Metrics 适配器
-- [ ] 全部 nice_to_have 指标: realized_cap / mvrv / 成本带 / 鲸鱼积累 / 交易所净流
-- [ ] 回测增强: 多周期叠加图、阶段统计面板
-- [ ] 评分中 onchain_capital 组件真实数据填充
+- [x] Nginx 反向代理模板 + Compose profile
 
 ## 技术栈
 
