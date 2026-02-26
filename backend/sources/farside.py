@@ -38,7 +38,7 @@ class FarsideAdapter(SourceAdapter):
 
         html = self._request_text(
             method="GET",
-            url="https://farside.co.uk/bitcoin-etf-flow-all-data",
+            url="https://farside.co.uk/bitcoin-etf-flow-all-data/",
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"},
         )
         soup = BeautifulSoup(html, "html.parser")
