@@ -43,27 +43,46 @@ class FarsideAdapter(SourceAdapter):
         )
         soup = BeautifulSoup(html, "html.parser")
 
+        # Find the ETF flow table: look for a table containing 'IBIT' or 'FBTC' in any cell
         table = None
         for candidate in soup.find_all("table"):
-            headers = [th.get_text(strip=True) for th in candidate.find_all("th")]
-            header_set = {h.lower() for h in headers}
-            if "date" in header_set and ("total" in header_set or "ibit" in header_set):
+            text = candidate.get_text()
+            if "IBIT" in text or "FBTC" in text:
                 table = candidate
                 break
         if table is None:
             logger.warning("farside_table_not_found")
             return []
 
-        headers = [th.get_text(strip=True) for th in table.find_all("th")]
+        # Extract headers from the row containing fund tickers (e.g. IBIT, FBTC)
+        # The first column (empty) is Date, the last column is Total
+        headers: list[str] = []
+        rows = table.find_all("tr")
+        for row in rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
+            if any(c in ("IBIT", "FBTC", "BITB", "ARKB") for c in cells):
+                headers = ["Date" if c == "" else ("Total" if i == len(cells) - 1 and c == "" else c)
+                           for i, c in enumerate(cells)]
+                break
+
+        if not headers:
+            logger.warning("farside_header_row_not_found")
+            return []
+
         observations: list[SourceObservation] = []
 
-        for row in table.find_all("tr"):
-            cells = [td.get_text(strip=True) for td in row.find_all("td")]
+        for row in rows:
+            cells = [c.get_text(strip=True) for c in row.find_all(["td", "th"])]
             if not cells or len(cells) != len(headers):
                 continue
             row_map = dict(zip(headers, cells))
             date_raw = row_map.get("Date")
             if not date_raw:
+                continue
+            # Skip non-date rows (e.g. Fee row)
+            try:
+                self._parse_date(date_raw)
+            except Exception:
                 continue
 
             ts = self._parse_date(date_raw)
