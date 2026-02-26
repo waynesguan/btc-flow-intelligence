@@ -1,41 +1,39 @@
-import { getMetricCatalog } from "@/lib/api";
+import WindowTabs from "@/components/layout/WindowTabs";
+import MetricExplorer from "@/components/metrics/MetricExplorer";
+import { getMetricCatalog, getStageStats, normalizeWindow } from "@/lib/api";
 
-export default async function MetricsPage() {
-  const catalog = await getMetricCatalog("must_have");
+type Props = {
+  searchParams?: Record<string, string | string[] | undefined>;
+};
+
+export default async function MetricsPage({ searchParams }: Props) {
+  const rawWindow = searchParams?.window;
+  const window = normalizeWindow(Array.isArray(rawWindow) ? rawWindow[0] : rawWindow);
+
+  const [mustHave, niceToHave, stageStats] = await Promise.all([
+    getMetricCatalog("must_have"),
+    getMetricCatalog("nice_to_have"),
+    getStageStats(window).catch(() => null)
+  ]);
+
+  const catalog = [...mustHave.data, ...niceToHave.data].sort((a, b) => {
+    if (a.dimension === b.dimension) {
+      return a.metric_id.localeCompare(b.metric_id);
+    }
+    return a.dimension - b.dimension;
+  });
 
   return (
     <section>
       <header className="pageHeader">
         <div>
           <h1>指标详情</h1>
-          <p>Phase 1 提供 must_have 指标口径、来源与公式信息。</p>
+          <p>点击单个指标展开时序图表，并查看阶段统计与回测叠加。</p>
         </div>
       </header>
 
-      <div className="contentCard">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Metric ID</th>
-              <th>维度</th>
-              <th>领先性</th>
-              <th>来源</th>
-              <th>公式</th>
-            </tr>
-          </thead>
-          <tbody>
-            {catalog.data.map((row) => (
-              <tr key={String(row.metric_id)}>
-                <td>{String(row.metric_id)}</td>
-                <td>{String(row.dimension)}</td>
-                <td>{String(row.lead_lag)}</td>
-                <td>{Array.isArray((row.source_priority as { sources?: string[] }).sources) ? (row.source_priority as { sources: string[] }).sources.join(", ") : "n/a"}</td>
-                <td>{String((row.calc_spec as { formula?: string }).formula ?? "n/a")}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <WindowTabs pathname="/metrics" active={window} />
+      <MetricExplorer catalog={catalog} stageStats={stageStats?.data ?? null} window={window} />
     </section>
   );
 }

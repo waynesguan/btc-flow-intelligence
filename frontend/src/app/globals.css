@@ -191,6 +191,28 @@ h3 {
   cursor: pointer;
 }
 
+.metricExplorer {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.metricSearch {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: var(--font-mono), monospace;
+}
+
+.metricRow {
+  cursor: pointer;
+}
+
+.metricRow.active {
+  background: #e0f2fe66;
+}
+
 @media (max-width: 900px) {
   .metricGrid {
     grid-template-columns: 1fr;
